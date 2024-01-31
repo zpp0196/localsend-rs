@@ -1,0 +1,37 @@
+[package]
+name = "localsend"
+version = "0.1.0"
+authors = ["zpp0196 zpp0196@gmail.com"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/zpp0196/localsend-rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.79"
+async-trait = "0.1.77"
+clap = { version = "4.4.18", features = ["derive", "env"] }
+colored = "2.1.0"
+comfy-table = "7.1.0"
+ctrlc = "3.4.2"
+humansize = "2.1.3"
+indicatif = "0.17.7"
+inquire = "0.6.2"
+itertools = "0.12.1"
+localsend-lib = { path = "localsend-lib" }
+localsend-proto = { path = "localsend-proto" }
+log = "0.4.20"
+simple_logger = "4.3.3"
+tokio = { version = "1.35.1", features = ["rt-multi-thread"] }
+
+[workspace]
+members = ["localsend-lib", "localsend-proto"]
+resolver = "2"
+
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = 'symbols'
