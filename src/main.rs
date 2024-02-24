@@ -9,7 +9,9 @@ use localsend_lib::{
     util::device,
     Result,
 };
-use localsend_proto::{Device, DEFAULT_MULTICAST, DEFAULT_PORT, PROTOCOL_VERSION_2};
+use localsend_proto::{
+    Device, DEFAULT_HTTP_PORT, DEFAULT_MULTICAST, DEFAULT_PORT, PROTOCOL_VERSION_2,
+};
 use simple_logger::SimpleLogger;
 
 use crate::ui::{InteractiveUI, PromptUI, UploadFileProgressBar};
@@ -29,6 +31,10 @@ struct Args {
     /// Port of localsend
     #[arg(long, env = "LOCALSEND_PORT", default_value_t = DEFAULT_PORT)]
     port: u16,
+
+    /// Port of localsend http server
+    #[arg(long, env = "LOCALSEND_HTTP_PORT", default_value_t = DEFAULT_HTTP_PORT)]
+    http_port: u16,
 
     /// Text or file path to be sent
     #[clap(required = true)]
@@ -57,13 +63,13 @@ async fn main() -> Result<()> {
         device_type: localsend_proto::DeviceType::Headless,
         download: false,
         https: false,
-        port: local_addr.port(),
+        port: args.http_port,
     };
 
     let shared_state = Arc::new(tokio::sync::Mutex::new(ServerState::default()));
     let server_state = shared_state.clone();
     tokio::spawn(async move {
-        start_api_server(local_addr.port(), server_state)
+        start_api_server(args.http_port, server_state)
             .await
             .expect("Failed to start api server")
     });
