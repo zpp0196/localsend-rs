@@ -29,8 +29,8 @@ $ localsend "text to sent" /path/to/file ...
     - [x] Multicast address
     - [x] Port
     - [ ] Enable https
-    - [ ] Quick Save
-    - [ ] Save directory
+    - [x] Quick Save
+    - [x] Save directory
     - [ ] Non interactive mode
 - [x] Discovery
     - [x] Multicast UDP
@@ -41,7 +41,7 @@ $ localsend "text to sent" /path/to/file ...
     - [x] Cancel sending
     - [x] File upload progress bar
     - [x] Fuzzy Select devices
-    - [ ] Receive files
+    - [x] Receive files
 - [ ] Reverse file transfer
     - [ ] Browser URL
     - [ ] ~~Receive request~~(not in plan)

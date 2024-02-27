@@ -251,7 +251,7 @@ impl SendSession {
         self.cancel(true).await
     }
 
-    async fn cancel(self, from_sender: bool) -> Result<()> {
+    pub async fn cancel(self, from_sender: bool) -> Result<()> {
         let cancel_token = self.cancel_token.ok_or(SendError::NoPermission)?;
         let cancel_result = if from_sender {
             let v2_args = if let Some(session_id) = &self.remote_session_id {

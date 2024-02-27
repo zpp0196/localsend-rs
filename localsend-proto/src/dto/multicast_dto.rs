@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Device, DeviceType, FALLBACK_PROTOCOL_VERSION};
+use crate::{Device, DeviceType, FALLBACK_PROTOCOL_VERSION, PROTOCOL_VERSION_2};
 
 use super::ProtocolType;
 
@@ -35,6 +35,28 @@ impl MulticastDto {
             fingerprint: fingerprint.to_string(),
             port: None,
             protocol: None,
+            download: None,
+            announcement: Some(announcement),
+            announce: None,
+        }
+    }
+
+    pub fn v2(
+        alias: impl ToString,
+        device_model: Option<String>,
+        device_type: DeviceType,
+        fingerprint: impl ToString,
+        port: u16,
+        announcement: bool,
+    ) -> Self {
+        Self {
+            alias: alias.to_string(),
+            version: Some(PROTOCOL_VERSION_2.to_string()),
+            device_model,
+            device_type: Some(device_type),
+            fingerprint: fingerprint.to_string(),
+            port: Some(port),
+            protocol: Some(ProtocolType::Http),
             download: None,
             announcement: Some(announcement),
             announce: None,

@@ -1,20 +1,20 @@
-use std::{net::Ipv4Addr, sync::Arc};
+use std::{net::Ipv4Addr, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
 use itertools::Itertools;
 use localsend_lib::{
     scanner::MulticastDeviceScanner,
     send::{SendError, SendSession, SendingFiles, UploadProgress},
-    server::{start_api_server, ServerState},
+    server::{start_api_server, ClientMessage, ServerMessage, ServerState},
     util::device,
-    Result,
+    Result, Settings,
 };
 use localsend_proto::{
     Device, DEFAULT_HTTP_PORT, DEFAULT_MULTICAST, DEFAULT_PORT, PROTOCOL_VERSION_2,
 };
 use simple_logger::SimpleLogger;
 
-use crate::ui::{InteractiveUI, PromptUI, UploadFileProgressBar};
+use crate::ui::{FileProgressBar, InteractiveUI, PromptUI};
 
 mod ui;
 
@@ -36,8 +36,43 @@ struct Args {
     #[arg(long, env = "LOCALSEND_HTTP_PORT", default_value_t = DEFAULT_HTTP_PORT)]
     http_port: u16,
 
+    #[clap(subcommand)]
+    cmd: SubCommand,
+}
+
+impl Args {
+    fn is_receive_mode(&self) -> bool {
+        if let SubCommand::Receive(_) = self.cmd {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(clap::Subcommand)]
+enum SubCommand {
+    /// Run as receive server
+    Receive(ReceiveArgs),
+    /// Run as send client
+    Send(SendArgs),
+}
+
+#[derive(Parser)]
+struct ReceiveArgs {
+    /// File save destination path
+    #[arg(long = "dest", env = "LOCALSEND_DESTINATION", default_value = ".")]
+    destination: PathBuf,
+
+    /// Quickly save all files without asking
+    #[arg(long = "quick-save")]
+    quick_save: bool,
+}
+
+#[derive(Parser)]
+struct SendArgs {
     /// Text or file path to be sent
-    #[clap(required = true)]
+    #[arg(required = true)]
     input: Vec<String>,
 }
 
@@ -49,7 +84,7 @@ async fn main() -> Result<()> {
         .init()
         .expect("Failed to init logger");
 
-    let args = Args::parse();
+    let args: Args = Args::parse();
 
     let local_addr = device::local_addr()?;
     log::debug!("local_addr: {:?}", local_addr);
@@ -66,7 +101,18 @@ async fn main() -> Result<()> {
         port: args.http_port,
     };
 
-    let shared_state = Arc::new(tokio::sync::Mutex::new(ServerState::default()));
+    let (server_tx, mut server_rx) = tokio::sync::mpsc::channel(1);
+    let (client_tx, client_rx) = tokio::sync::mpsc::channel(1);
+    let mut state = ServerState::new(server_tx, client_rx);
+    {
+        let mut settings = Settings::default();
+        if let SubCommand::Receive(args) = &args.cmd {
+            settings.destination = args.destination.clone();
+            settings.quick_save = args.quick_save;
+        };
+        state.settings = settings;
+    }
+    let shared_state = Arc::new(tokio::sync::Mutex::new(state));
     let server_state = shared_state.clone();
     tokio::spawn(async move {
         start_api_server(args.http_port, server_state)
@@ -76,14 +122,16 @@ async fn main() -> Result<()> {
 
     let mut send_files = SendingFiles::default();
 
-    for text in &args.input.iter().unique().collect_vec() {
-        if let Ok(path) = std::fs::canonicalize(text) {
-            if path.is_file() {
-                send_files.add_file(path)?;
-                continue;
+    if let SubCommand::Send(args) = &args.cmd {
+        for text in args.input.iter().unique().collect_vec() {
+            if let Ok(path) = std::fs::canonicalize(text) {
+                if path.is_file() {
+                    send_files.add_file(path)?;
+                    continue;
+                }
             }
+            send_files.add_text(text, text.len() < 1024);
         }
-        send_files.add_text(text, text.len() < 1024);
     }
 
     let (running_tx, mut running_rx) = tokio::sync::mpsc::channel(1);
@@ -103,18 +151,73 @@ async fn main() -> Result<()> {
         });
     }
 
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<UploadProgress>(100);
-    let mut pb = UploadFileProgressBar::new(&send_files);
-    tokio::spawn(async move {
-        while let Some(progress) = progress_rx.recv().await {
-            pb.update(progress).await;
-        }
-    });
-
-    let scanner = MulticastDeviceScanner::new(&device, args.multiaddr, args.port).await?;
+    let scanner =
+        MulticastDeviceScanner::new(&device, args.multiaddr, args.port, args.http_port).await?;
+    let scanner = Arc::new(scanner);
     let ui = PromptUI::default();
 
+    if args.is_receive_mode() {
+        let scanner = scanner.clone();
+        tokio::spawn(async move {
+            loop {
+                for ms in vec![100, 500, 2000] {
+                    scanner.send_announcement().await;
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                }
+            }
+        });
+
+        if let SubCommand::Receive(args) = args.cmd {
+            if args.quick_save {
+                std::future::pending::<()>().await
+            }
+        }
+
+        let message = ui
+            .show_loading("Waiting".to_string(), async move { server_rx.recv().await })
+            .await;
+        match message {
+            Some(ServerMessage::SelectedFiles(files)) => {
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::channel::<UploadProgress>(100);
+
+                let files = match ui.select_files(files) {
+                    Some(files) => files,
+                    None => {
+                        client_tx.send(ClientMessage::Declined).await.unwrap();
+                        return Ok(());
+                    }
+                };
+                let pb_files = files
+                    .iter()
+                    .map(|file| (file.id.clone(), file.clone()))
+                    .collect();
+
+                client_tx
+                    .send(ClientMessage::FilesSelected(progress_tx, files))
+                    .await
+                    .unwrap();
+
+                let mut pb = FileProgressBar::new(pb_files);
+                while let Some(progress) = progress_rx.recv().await {
+                    pb.update(progress);
+                }
+            }
+            _ => return Ok(()),
+        }
+
+        std::process::exit(0)
+    }
+
     let run = || async {
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<UploadProgress>(100);
+        let mut pb = FileProgressBar::new(send_files.to_dto_map());
+        tokio::spawn(async move {
+            while let Some(progress) = progress_rx.recv().await {
+                pb.update(progress);
+            }
+        });
+
         ui.print_files(&send_files);
 
         let target = ui.select_device(&scanner).await?;

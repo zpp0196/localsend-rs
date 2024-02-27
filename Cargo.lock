@@ -946,6 +946,7 @@ dependencies = [
 name = "localsend-proto"
 version = "0.1.0"
 dependencies = [
+ "mime_guess",
  "serde",
  "serde_json",
 ]
