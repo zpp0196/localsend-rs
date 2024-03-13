@@ -36,6 +36,10 @@ struct Args {
     #[arg(long, env = "LOCALSEND_HTTP_PORT", default_value_t = DEFAULT_HTTP_PORT)]
     http_port: u16,
 
+    /// Do not use nerd fonts
+    #[arg(long)]
+    no_nerd: bool,
+
     #[clap(subcommand)]
     cmd: SubCommand,
 }
@@ -157,7 +161,8 @@ async fn main() -> Result<()> {
     let scanner =
         MulticastDeviceScanner::new(&device, args.multiaddr, args.port, args.http_port).await?;
     let scanner = Arc::new(scanner);
-    let ui = PromptUI::default();
+    let mut ui = PromptUI::default();
+    ui.use_nerd_fonts = !args.no_nerd;
 
     if args.is_receive_mode() {
         let scanner = scanner.clone();
@@ -201,7 +206,7 @@ async fn main() -> Result<()> {
                     .await
                     .unwrap();
 
-                let mut pb = FileProgressBar::new(pb_files);
+                let mut pb = FileProgressBar::new(pb_files, !args.no_nerd);
                 while let Some(progress) = progress_rx.recv().await {
                     pb.update(progress);
                 }
@@ -214,7 +219,7 @@ async fn main() -> Result<()> {
 
     let run = || async {
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<UploadProgress>(100);
-        let mut pb = FileProgressBar::new(send_files.to_dto_map());
+        let mut pb = FileProgressBar::new(send_files.to_dto_map(), !args.no_nerd);
         tokio::spawn(async move {
             while let Some(progress) = progress_rx.recv().await {
                 pb.update(progress);

@@ -14,6 +14,8 @@ use localsend_proto::{
     Device,
 };
 
+const PROGRESS_BAR_NO_NERD_TICK_CHARS: &'static str = "+x*";
+
 pub struct FileProgressBar {
     style: ProgressStyle,
     pbs: HashMap<String, ProgressBar>,
@@ -21,11 +23,14 @@ pub struct FileProgressBar {
 }
 
 impl FileProgressBar {
-    pub fn new(files: HashMap<String, FileDto>) -> Self {
-        let style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} [{elapsed_precise}] [{msg}] [{bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-        .progress_chars("#>-");
+    pub fn new(files: HashMap<String, FileDto>, use_nerd_fonts: bool) -> Self {
+        let mut style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} [{elapsed_precise}] [{msg}] [{bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+            .progress_chars("#>-");
+        if !use_nerd_fonts {
+            style = style.tick_chars(PROGRESS_BAR_NO_NERD_TICK_CHARS);
+        }
         Self {
             style,
             pbs: HashMap::new(),
@@ -76,8 +81,18 @@ pub trait InteractiveUI {
     fn ask_continue(&self) -> bool;
 }
 
-#[derive(Default, Clone)]
-pub struct PromptUI;
+#[derive(Clone)]
+pub struct PromptUI {
+    pub use_nerd_fonts: bool,
+}
+
+impl Default for PromptUI {
+    fn default() -> Self {
+        Self {
+            use_nerd_fonts: true,
+        }
+    }
+}
 
 #[async_trait]
 impl InteractiveUI for PromptUI {
@@ -151,8 +166,13 @@ impl InteractiveUI for PromptUI {
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
+        let mut style = ProgressStyle::default_spinner();
+        if !self.use_nerd_fonts {
+            style = style.tick_chars(PROGRESS_BAR_NO_NERD_TICK_CHARS);
+        }
         let pb = indicatif::ProgressBar::new_spinner();
         pb.set_message(message);
+        pb.set_style(style);
         let l = pb.clone();
         let timer = tokio::spawn(async move {
             loop {
@@ -167,15 +187,17 @@ impl InteractiveUI for PromptUI {
     }
 
     fn select_files(&self, files: Vec<FileDto>) -> Option<Vec<FileDto>> {
-        struct SelectItem<'a>(&'a FileDto);
+        struct SelectItem<'a>(&'a PromptUI, &'a FileDto);
 
         impl<'a> std::fmt::Display for SelectItem<'a> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(format!("{} {}", file_name(self.0), file_size(self.0)).as_str())
+                f.write_str(
+                    format!("{} {}", self.0.file_name(self.1), self.0.file_size(self.1)).as_str(),
+                )
             }
         }
 
-        let items: Vec<SelectItem> = files.iter().map(|file| SelectItem(&file)).collect();
+        let items: Vec<SelectItem> = files.iter().map(|file| SelectItem(self, &file)).collect();
         let defaults: Vec<usize> = items.iter().enumerate().map(|(index, _)| index).collect();
         let selection = inquire::MultiSelect::new("Select the files you want to receive", items)
             .with_default(&defaults)
@@ -185,7 +207,7 @@ impl InteractiveUI for PromptUI {
             .with_vim_mode(true)
             .prompt_skippable();
         match selection {
-            Ok(Some(files)) => Some(files.into_iter().map(|f| f.0.to_owned()).collect()),
+            Ok(Some(files)) => Some(files.into_iter().map(|f| f.1.to_owned()).collect()),
             _ => None,
         }
     }
@@ -196,8 +218,8 @@ impl InteractiveUI for PromptUI {
         for file in files.files.values() {
             table.add_row(vec![
                 &format!("{}", file.index + 1),
-                &file_name(&file.file),
-                &file_size(&file.file),
+                &self.file_name(&file.file),
+                &self.file_size(&file.file),
             ]);
         }
         println!("{}", table);
@@ -217,21 +239,26 @@ impl InteractiveUI for PromptUI {
     }
 }
 
-fn file_name(file: &FileDto) -> String {
-    format!("{} {}", file_icon(&file.file_type), file.file_name)
-}
-
-fn file_icon(file_type: &FileType) -> &'static str {
-    match file_type {
-        FileType::Image => "󰈟",
-        FileType::Video => "󰈫",
-        FileType::Pdf => "󰈧",
-        FileType::Text => "󰈙",
-        FileType::Apk => "󰀲",
-        FileType::Other => "󰈔",
+impl PromptUI {
+    fn file_name(&self, file: &FileDto) -> String {
+        format!("{} {}", self.file_icon(&file.file_type), file.file_name)
     }
-}
 
-fn file_size(file: &FileDto) -> String {
-    humansize::format_size(file.size, humansize::DECIMAL)
+    fn file_icon(&self, file_type: &FileType) -> &'static str {
+        if !self.use_nerd_fonts {
+            return "";
+        }
+        match file_type {
+            FileType::Image => "󰈟",
+            FileType::Video => "󰈫",
+            FileType::Pdf => "󰈧",
+            FileType::Text => "󰈙",
+            FileType::Apk => "󰀲",
+            FileType::Other => "󰈔",
+        }
+    }
+
+    fn file_size(&self, file: &FileDto) -> String {
+        humansize::format_size(file.size, humansize::DECIMAL)
+    }
 }
