@@ -18,15 +18,16 @@ pub struct MulticastDeviceScanner {
 }
 
 impl MulticastDeviceScanner {
-    pub async fn new(device: &Device, multiaddr: Ipv4Addr, port: u16) -> std::io::Result<Self> {
+    pub async fn new(device: &Device, multiaddr: Ipv4Addr, port: u16, http_port: u16) -> std::io::Result<Self> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
         socket.join_multicast_v4(multiaddr, Ipv4Addr::UNSPECIFIED)?;
 
-        let device = MulticastDto::v1(
+        let device = MulticastDto::v2(
             device.alias.clone(),
             device.device_model.clone(),
             DeviceType::Headless,
             device.fingerprint.clone(),
+            http_port,
             true,
         );
         let announce_msg = serde_json::to_string(&device)?;
@@ -41,7 +42,7 @@ impl MulticastDeviceScanner {
 }
 
 impl MulticastDeviceScanner {
-    async fn send_announcement(&self) {
+    pub async fn send_announcement(&self) {
         let size = self
             .socket
             .send_to(self.announce_msg.as_bytes(), self.addr)

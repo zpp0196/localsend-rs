@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write, time::Duration};
+use std::{collections::HashMap, fmt::Write, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use colored::Colorize;
@@ -14,14 +14,14 @@ use localsend_proto::{
     Device,
 };
 
-pub struct UploadFileProgressBar {
+pub struct FileProgressBar {
     style: ProgressStyle,
     pbs: HashMap<String, ProgressBar>,
-    files: SendingFiles,
+    files: HashMap<String, FileDto>,
 }
 
-impl UploadFileProgressBar {
-    pub fn new(files: &SendingFiles) -> Self {
+impl FileProgressBar {
+    pub fn new(files: HashMap<String, FileDto>) -> Self {
         let style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} [{elapsed_precise}] [{msg}] [{bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
         .unwrap()
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
@@ -29,11 +29,11 @@ impl UploadFileProgressBar {
         Self {
             style,
             pbs: HashMap::new(),
-            files: files.clone(),
+            files,
         }
     }
 
-    pub async fn update(&mut self, progress: UploadProgress) {
+    pub fn update(&mut self, progress: UploadProgress) {
         if let Some(pb) = self.pbs.get(&progress.file_id) {
             pb.set_position(progress.position);
             if progress.finish {
@@ -42,11 +42,11 @@ impl UploadFileProgressBar {
             return;
         }
 
-        let sending_file = self.files.get(&progress.file_id).unwrap();
-        let file = &sending_file.file;
+        let file = self.files.get(&progress.file_id).unwrap();
+        let index = self.files.values().position(|f| f.id == file.id).unwrap();
 
         let pb = indicatif::ProgressBar::new(file.size)
-            .with_prefix(format!("[{}/{}]", sending_file.index + 1, self.files.len()))
+            .with_prefix(format!("[{}/{}]", index + 1, self.files.len()))
             .with_style(self.style.clone())
             .with_message(file.file_name.clone())
             .with_position(progress.position);
@@ -60,7 +60,14 @@ impl UploadFileProgressBar {
 
 #[async_trait]
 pub trait InteractiveUI {
-    async fn select_device(&self, scanner: &MulticastDeviceScanner) -> Result<Device>;
+    async fn select_device(&self, scanner: &Arc<MulticastDeviceScanner>) -> Result<Device>;
+
+    async fn show_loading<T>(&self, message: String, task: T) -> T::Output
+    where
+        T: Future + Send + 'static,
+        T::Output: Send + 'static;
+
+    fn select_files(&self, files: Vec<FileDto>) -> Option<Vec<FileDto>>;
 
     fn print_files(&self, files: &SendingFiles);
 
@@ -74,22 +81,12 @@ pub struct PromptUI;
 
 #[async_trait]
 impl InteractiveUI for PromptUI {
-    async fn select_device(&self, scanner: &MulticastDeviceScanner) -> Result<Device> {
+    async fn select_device(&self, scanner: &Arc<MulticastDeviceScanner>) -> Result<Device> {
         loop {
             let devices = {
-                let pb = indicatif::ProgressBar::new_spinner();
-                pb.set_message("Scanning");
-                let l = pb.clone();
-                let timer = tokio::spawn(async move {
-                    loop {
-                        l.inc(1);
-                        tokio::time::sleep(Duration::from_millis(64)).await;
-                    }
-                });
-                let devices = scanner.scan().await?;
-                pb.finish_and_clear();
-                timer.abort();
-                devices
+                let scanner = scanner.clone();
+                self.show_loading("Scanning".to_owned(), async move { scanner.scan().await })
+                    .await?
             };
 
             use colored::Colorize;
@@ -149,26 +146,51 @@ impl InteractiveUI for PromptUI {
         }
     }
 
-    fn print_files(&self, files: &SendingFiles) {
-        fn file_name(file: &FileDto) -> String {
-            format!("{} {}", file_icon(&file.file_type), file.file_name)
-        }
+    async fn show_loading<T>(&self, message: String, task: T) -> T::Output
+    where
+        T: Future + Send + 'static,
+        T::Output: Send + 'static,
+    {
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_message(message);
+        let l = pb.clone();
+        let timer = tokio::spawn(async move {
+            loop {
+                l.inc(1);
+                tokio::time::sleep(Duration::from_millis(64)).await;
+            }
+        });
+        let output = task.await;
+        pb.finish_and_clear();
+        timer.abort();
+        output
+    }
 
-        fn file_icon(file_type: &FileType) -> &'static str {
-            match file_type {
-                FileType::Image => "󰈟",
-                FileType::Video => "󰈫",
-                FileType::Pdf => "󰈧",
-                FileType::Text => "󰈙",
-                FileType::Apk => "󰀲",
-                FileType::Other => "󰈔",
+    fn select_files(&self, files: Vec<FileDto>) -> Option<Vec<FileDto>> {
+        struct SelectItem<'a>(&'a FileDto);
+
+        impl<'a> std::fmt::Display for SelectItem<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(format!("{} {}", file_name(self.0), file_size(self.0)).as_str())
             }
         }
 
-        fn file_size(file: &FileDto) -> String {
-            humansize::format_size(file.size, humansize::DECIMAL)
+        let items: Vec<SelectItem> = files.iter().map(|file| SelectItem(&file)).collect();
+        let defaults: Vec<usize> = items.iter().enumerate().map(|(index, _)| index).collect();
+        let selection = inquire::MultiSelect::new("Select the files you want to receive", items)
+            .with_default(&defaults)
+            .with_help_message(
+                "↑↓ to move, space to select one, → to all, ← to none, type to filter, esc to cancel",
+            )
+            .with_vim_mode(true)
+            .prompt_skippable();
+        match selection {
+            Ok(Some(files)) => Some(files.into_iter().map(|f| f.0.to_owned()).collect()),
+            _ => None,
         }
+    }
 
+    fn print_files(&self, files: &SendingFiles) {
         let mut table = Table::new();
         table.set_header(vec!["No.", "Name", "Size"]);
         for file in files.files.values() {
@@ -193,4 +215,23 @@ impl InteractiveUI for PromptUI {
             .prompt_skippable()
             .is_ok_and(|r| r == Some(true))
     }
+}
+
+fn file_name(file: &FileDto) -> String {
+    format!("{} {}", file_icon(&file.file_type), file.file_name)
+}
+
+fn file_icon(file_type: &FileType) -> &'static str {
+    match file_type {
+        FileType::Image => "󰈟",
+        FileType::Video => "󰈫",
+        FileType::Pdf => "󰈧",
+        FileType::Text => "󰈙",
+        FileType::Apk => "󰀲",
+        FileType::Other => "󰈔",
+    }
+}
+
+fn file_size(file: &FileDto) -> String {
+    humansize::format_size(file.size, humansize::DECIMAL)
 }

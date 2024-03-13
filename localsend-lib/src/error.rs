@@ -7,5 +7,7 @@ pub enum Error {
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
+    Receive(#[from] crate::receive::ReceiveError),
+    #[error(transparent)]
     Send(#[from] crate::send::SendError),
 }
