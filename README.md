@@ -27,13 +27,13 @@ $ localsend send "text to sent" /path/to/file ...
 
 ```bash
 # receive files and save to $(pwd)
-$ localsend.exe receive
+$ localsend receive
 
 # receive files and save to path
-$ localsend.exe receive --dest /path/to/save
+$ localsend receive --dest /path/to/save
 
 # receive all files automatically
-$ localsend.exe receive --quick-save
+$ localsend receive --quick-save
 ```
 
 ## Roadmap
