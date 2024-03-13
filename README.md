@@ -10,15 +10,30 @@ $ cargo install --git https://github.com/zpp0196/localsend-rs.git
 
 ## Usage
 
+### Send
+
 ```bash
 # send text only
-$ localsend "text to sent"
+$ localsend send "text to sent"
 
 # send files
-$ localsend /path/to/file1 /path/to/file2 ...
+$ localsend send /path/to/file1 /path/to/file2 ...
 
 # send mixed texts and files
-$ localsend "text to sent" /path/to/file ...
+$ localsend send "text to sent" /path/to/file ...
+```
+
+### Receive
+
+```bash
+# receive files and save to $(pwd)
+$ localsend.exe receive
+
+# receive files and save to path
+$ localsend.exe receive --dest /path/to/save
+
+# receive all files automatically
+$ localsend.exe receive --quick-save
 ```
 
 ## Roadmap
