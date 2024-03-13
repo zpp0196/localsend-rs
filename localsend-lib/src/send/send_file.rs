@@ -69,8 +69,37 @@ impl SendingFiles {
             .insert(id.clone(), SendingFile::new(self.files.len(), file, None));
     }
 
-    pub fn add_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        fn file_name(path: &Path) -> Option<String> {
+    pub fn add_dir(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        use super::SendError;
+
+        let base = path.as_ref().parent().ok_or(SendError::NoPermission)?;
+
+        for entry in walkdir::WalkDir::new(&path) {
+            let entry = entry?;
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+
+            let diff_path =
+                pathdiff::diff_paths(entry_path, &base).ok_or(SendError::NoPermission)?;
+            let file_name = match diff_path.to_str() {
+                Some(name) => name.replace("\\", "/"),
+                None => {
+                    log::error!("ignore file: {:?}", entry_path);
+                    continue;
+                }
+            };
+
+            log::debug!("add file {}", file_name);
+            self.add_file(entry_path, Some(file_name))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_file(&mut self, path: impl AsRef<Path>, file_name: Option<String>) -> Result<()> {
+        fn get_file_name(path: &Path) -> Option<String> {
             Some(path.file_name()?.to_str()?.to_string())
         }
 
@@ -94,7 +123,7 @@ impl SendingFiles {
 
         let id = Uuid::new_v4().to_string();
         let size = std::fs::metadata(path)?.len();
-        let file_name = file_name(path).unwrap_or(id.clone());
+        let file_name = file_name.unwrap_or(get_file_name(path).unwrap_or(id.clone()));
         let file_type = file_type(&file_name);
 
         let file = FileDto {

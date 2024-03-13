@@ -10,4 +10,6 @@ pub enum Error {
     Receive(#[from] crate::receive::ReceiveError),
     #[error(transparent)]
     Send(#[from] crate::send::SendError),
+    #[error(transparent)]
+    WalkDir(#[from] walkdir::Error),
 }
