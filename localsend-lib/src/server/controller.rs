@@ -296,6 +296,12 @@ async fn upload(
 
         const BUF_SIZE: usize = 1024 * 8;
         let path = std::path::Path::new(destination).join(&receiving_file.file.file_name);
+        if let Some(path) = path.parent() {
+            if !path.exists() {
+                tokio::fs::create_dir_all(path).await?;
+            }
+        }
+
         let file = File::create(&path).await?;
         let mut file_buf = BufWriter::with_capacity(BUF_SIZE, file);
 

@@ -126,7 +126,10 @@ async fn main() -> Result<()> {
         for text in args.input.iter().unique().collect_vec() {
             if let Ok(path) = std::fs::canonicalize(text) {
                 if path.is_file() {
-                    send_files.add_file(path)?;
+                    send_files.add_file(path, None)?;
+                    continue;
+                } else if path.is_dir() {
+                    send_files.add_dir(path)?;
                     continue;
                 }
             }
